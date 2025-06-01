@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Flight Tracker Made by Aditya</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header class="header">
+            <div class="header-content">
+                <h1 class="title">✈️ 𝕃𝕚𝕧𝕖 ℙ𝕣𝕚𝕧𝕒𝕥𝕖 & 𝕄𝕚𝕝𝕚𝕥𝕒𝕣𝕪 𝔽𝕝𝕚𝕘𝕙𝕥 𝕋𝕣𝕒𝕔𝕜𝕖𝕣 </h1>
+                <div class="status-info">
+                    <div class="status-item">
+                        <span class="status-label">Flights Tracked:</span>
+                        <span id="flight-count" class="status-value">0</span>
+                    </div>
+                    <div class="status-item">
+                        <span class="status-label">Last Updated:</span>
+                        <span id="last-updated" class="status-value">--:--:--</span>
+                    </div>
+                    <div class="status-indicator">
+                        <div id="connection-status" class="status-dot"></div>
+                        <span id="connection-text">Connecting...</span>
+                    </div>
+                                     
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Content -->
+        <main class="main-content">
+            <!-- Map Container -->
+            <div class="map-section">
+                <div id="map" class="map-container"></div>
+                <div class="map-controls">
+                    <button id="refresh-btn" class="control-btn">🔄 Refresh</button>
+                    <button id="center-btn" class="control-btn">🌍 Center Map</button>
+                </div>
+            </div>
+
+            <!-- Flight List -->
+            <div class="flight-list-section">
+                <h2 class="section-title">Active Flights ✈️</h2>
+                <div id="flight-list" class="flight-list">
+                    <div class="loading-message">
+                        <div class="loading-spinner"></div>
+                        <p>Loading flight data...</p>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- Flight Details Modal -->
+        <div id="flight-modal" class="modal">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3 id="modal-title">Flight Details</h3>
+                    <button id="close-modal" class="close-btn">&times;</button>
+                </div>
+                <div id="modal-body" class="modal-body">
+                    <!-- Flight details will be inserted here -->
+                </div>
+            </div>
+        </div>
+    </div>
+    <!-- Credit Footer -->
+<div style="position: fixed; bottom: 10px; right: 10px; font-size: 12px; color: rgba(60, 184, 203, 0.893); font-family: 'Inter', sans-serif; background: rgba(8, 9, 16, 0.7); padding: 4px 8px; border-radius: 5px; z-index: 999;">
+    &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ᴍᴀᴅᴇ ʙʏ<br>
+    ᴀᴅɪᴛʏᴀ ꜱᴜʀʏᴀᴠᴀɴꜱʜɪ
+</div> 
+
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="{{ url_for('static', filename='script.js') }}"></script>
+</body>
+</html>
