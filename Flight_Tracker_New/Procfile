@@ -1,1 +1,1 @@
-gunicorn Flight_Tracker_New.app:app
+web: gunicorn app:app
