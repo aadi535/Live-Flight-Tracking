@@ -226,10 +226,11 @@ def get_status():
         'api_interval': api_call_interval
     })
 
+# Start background flight data updater thread (this runs even on Render/Gunicorn)
+update_thread = threading.Thread(target=data_updater.background_update, daemon=True)
+update_thread.start()
+
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
 
-# Start background flight data updater thread
-update_thread = threading.Thread(target=data_updater.background_update, daemon=True)
-update_thread.start()
 
