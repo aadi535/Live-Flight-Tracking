@@ -166,6 +166,7 @@ class FlightDataUpdater:
             return self.get_demo_flights()
 
     def background_update(self):
+        print("Background flight data update thread started...")
         """Background thread to update flight data with intelligent intervals"""
         global flight_data
         while True:
