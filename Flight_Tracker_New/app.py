@@ -227,3 +227,8 @@ def get_status():
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=10000)
+
+# Start background flight data updater thread
+update_thread = threading.Thread(target=data_updater.background_update, daemon=True)
+update_thread.start()
+
