@@ -1,31 +1,263 @@
-// Enhanced Flight Tracker with Smooth Flight Focusing and Welcome Popup
-class FlightTracker {
-    constructor() {
+class Flight {
+    constructor(data) {
+        this.icao24 = data.icao24;
+        this.callsign = data.callsign || 'N/A';
+        this.origin_country = data.origin_country;
+        this.destination_country = data.destination_country || 'N/A';
+        this.latitude = data.latitude;
+        this.longitude = data.longitude;
+        this.altitude = data.altitude || 0;
+        this.velocity = data.velocity || 0;
+        this.heading = data.heading || 0;
+        this.last_contact = data.last_contact || 'N/A';
+    }
+
+    isMilitary() {
+        if (!this.callsign) return false;
+        const militaryPrefixes = ["AF", "NAVY", "ARMY", "MARINE", "CG", "PAT"];
+        return militaryPrefixes.some(prefix => this.callsign.startsWith(prefix));
+    }
+
+    isPrivate() {
+        if (!this.callsign) return false;
+        const privatePrefixes = ["N", "G", "D", "F", "HB", "VP", "C"];
+        return privatePrefixes.some(prefix => this.callsign.startsWith(prefix)) || this.callsign.length <= 5;
+    }
+}
+
+class MapManager {
+    constructor(mapElementId) {
         this.map = null;
         this.flightMarkers = [];
+        this.flightPath = null;
+        this.initializeMap(mapElementId);
+    }
+
+    initializeMap(mapElementId) {
+        this.map = L.map(mapElementId, {
+            preferCanvas: true,
+            zoomSnap: 0.25,
+            zoomDelta: 0.25,
+            inertia: true,
+            inertiaDeceleration: 1000
+        }).setView([50.8503, 4.3517], 4);
+        
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 10,
+            minZoom: 2
+        }).addTo(this.map);
+
+        this.addMapControls();
+    }
+
+    addMapControls() {
+        const legend = L.control({ position: 'bottomleft' });
+        legend.onAdd = () => {
+            const div = L.DomUtil.create('div', 'map-legend');
+            div.innerHTML = `
+                <h4>Flight Types</h4>
+                <div><span class="legend-military">■</span> Military</div>
+                <div><span class="legend-private">■</span> Private</div>
+            `;
+            return div;
+        };
+        legend.addTo(this.map);
+    }
+
+    addFlightMarker(flight, onClickCallback) {
+        const isMilitary = flight.isMilitary();
+        const iconColor = isMilitary ? '#ff6b6b' : '#51cf66';
+        
+        const icon = L.divIcon({
+            className: 'flight-marker',
+            html: `<span style="color:${iconColor}">✈</span>`,
+            iconSize: [24, 24],
+            iconAnchor: [12, 12]
+        });
+        
+        const marker = L.marker([flight.latitude, flight.longitude], {
+            icon: icon,
+            rotationAngle: flight.heading,
+            icao24: flight.icao24
+        });
+        
+        marker.bindPopup(this.createFlightPopup(flight));
+        marker.addTo(this.map);
+        marker.flightData = flight;
+        marker.on('click', () => onClickCallback(flight.icao24));
+        this.flightMarkers.push(marker);
+        return marker;
+    }
+
+    createFlightPopup(flight) {
+        const isMilitary = flight.isMilitary();
+        return `
+            <div class="flight-popup">
+                <h4>${flight.callsign}</h4>
+                <p><strong>Type:</strong> <span class="${isMilitary ? 'military' : 'private'}">
+                    ${isMilitary ? 'MILITARY' : 'PRIVATE'}
+                </span></p>
+                <p><strong>From:</strong> ${flight.origin_country}</p>
+                <p><strong>To:</strong> ${flight.destination_country}</p>
+                <p><strong>Altitude:</strong> ${Math.round(flight.altitude)} m</p>
+                <p><strong>Speed:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p>
+                <button class="popup-btn focus-flight" data-icao="${flight.icao24}">
+                    <span>✈</span> Track Flight
+                </button>
+            </div>`;
+    }
+
+    clearMarkers() {
+        if (this.flightPath) {
+            this.map.removeLayer(this.flightPath);
+            this.flightPath = null;
+        }
+        this.flightMarkers.forEach(marker => this.map.removeLayer(marker));
+        this.flightMarkers = [];
+    }
+
+    highlightFlight(marker) {
+        this.flightMarkers.forEach(m => {
+            if (m._icon) {
+                m._icon.style.transform = '';
+                m._icon.style.zIndex = '';
+                m._icon.style.filter = '';
+            }
+        });
+        if (marker._icon) {
+            marker._icon.style.transform = 'scale(1.5)';
+            marker._icon.style.zIndex = '1000';
+            marker._icon.style.filter = 'drop-shadow(0 0 8px currentColor)';
+            if (!marker._popup || !marker._popup._map) {
+                marker.openPopup();
+            }
+        }
+    }
+
+    showFlightPath(flight) {
+        if (this.flightPath) {
+            this.map.removeLayer(this.flightPath);
+            this.flightPath = null;
+        }
+        if (!flight.heading || !flight.velocity) return;
+
+        const distance = flight.velocity * 0.2;
+        const headingRad = (flight.heading * Math.PI) / 180;
+        const lat1 = flight.latitude * Math.PI / 180;
+        const lon1 = flight.longitude * Math.PI / 180;
+        const R = 6371;
+        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance/R) + 
+                      Math.cos(lat1) * Math.sin(distance/R) * Math.cos(headingRad));
+        const lon2 = lon1 + Math.atan2(Math.sin(headingRad) * Math.sin(distance/R) * Math.cos(lat1), 
+                      Math.cos(distance/R) - Math.sin(lat1) * Math.sin(lat2));
+        const endLat = lat2 * 180 / Math.PI;
+        const endLng = lon2 * 180 / Math.PI;
+
+        this.flightPath = L.curve([
+            'M', [flight.latitude, flight.longitude],
+            'Q', [
+                flight.latitude + (endLat - flight.latitude) * 0.5 + 0.5,
+                flight.longitude + (endLng - flight.longitude) * 0.5
+            ],
+            [endLat, endLng]
+        ], {
+            color: '#667eea',
+            weight: 3,
+            dashArray: '10, 10',
+            opacity: 0.7,
+            fill: false,
+            smoothFactor: 1
+        }).addTo(this.map);
+
+        const arrowhead = L.polygon([
+            [endLat, endLng],
+            [endLat + 0.2, endLng + 0.2],
+            [endLat + 0.2, endLng - 0.2]
+        ], {
+            color: '#667eea',
+            fillColor: '#667eea',
+            fillOpacity: 0.7,
+            weight: 1
+        }).addTo(this.map);
+        
+        this.flightPath.arrowhead = arrowhead;
+    }
+
+    resetMapView() {
+        this.map.flyTo([40.7128, -74.0060], 3, {
+            duration: 1,
+            easeLinearity: 0.25
+        });
+    }
+}
+
+class FlightDataManager {
+    constructor() {
         this.flightData = [];
         this.filteredFlights = [];
-        this.updateInterval = null;
         this.selectedCountries = new Set([
-            'United States','India','France','Latvia','Germany', 
-            'United Kingdom','China',
-            'Japan', 'Canada', 'Australia','Russia','Brazil',
+            'United States', 'India', 'France', 'Latvia', 'Germany', 
+            'United Kingdom', 'China', 'Japan', 'Canada', 'Australia', 'Russia', 'Brazil'
         ]);
         this.showMilitaryOnly = false;
         this.maxMarkers = 500;
-        this.focusedFlight = null;
-        this.flightPath = null;
-        
-        this.initializeMap();
-        this.setupControls();
-        this.setupEventListeners();
-        this.createWelcomePopup();
-        this.startDataUpdate();
     }
-    
 
-    createWelcomePopup() {
-        // Create popup HTML
+    async fetchFlightData() {
+        try {
+            const response = await fetch('/api/flights');
+            if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
+            const data = await response.json();
+            if (!data.flights || !Array.isArray(data.flights)) throw new Error('Invalid flight data');
+            this.flightData = data.flights.map(flight => new Flight(flight));
+            this.filteredFlights = this.filterFlights();
+            return { count: data.count, last_updated: data.last_updated, demo_mode: data.demo_mode };
+        } catch (error) {
+            console.error('Fetch error:', error.message);
+            throw error;
+        }
+    }
+
+    filterFlights() {
+        return this.flightData.filter(flight => {
+            if (!this.selectedCountries.has(flight.origin_country)) return false;
+            if (this.showMilitaryOnly && !flight.isMilitary()) return false;
+            return true;
+        });
+    }
+
+    toggleCountry(country) {
+        if (this.selectedCountries.has(country)) {
+            this.selectedCountries.delete(country);
+        } else {
+            this.selectedCountries.add(country);
+        }
+        this.filteredFlights = this.filterFlights();
+    }
+
+    toggleMilitaryFilter() {
+        this.showMilitaryOnly = !this.showMilitaryOnly;
+        this.filteredFlights = this.filterFlights();
+    }
+}
+
+class UIManager {
+    constructor() {
+        this.focusedFlight = null;
+        this.selectors = {
+            flightList: '#flight-list',
+            flightModal: '#flight-modal',
+            modalTitle: '#modal-title',
+            modalBody: '#modal-body',
+            connectionStatus: '#connection-status',
+            connectionText: '#connection-text',
+            flightCount: '#flight-count',
+            lastUpdated: '#last-updated'
+        };
+    }
+
+    createWelcomePopup(closeCallback) {
         const popup = document.createElement('div');
         popup.id = 'welcome-popup';
         popup.className = 'welcome-popup';
@@ -45,161 +277,13 @@ class FlightTracker {
                 </div>
             </div>
         `;
-        
-
-        // Add styles for the popup
-        const styles = document.createElement('style');
-        styles.textContent = `
-            .welcome-popup {
-                position: fixed;
-                top: 55%;
-                left: -400px;
-                transform: translateY(-50%);
-                width: 350px;
-                background: linear-gradient(135deg,rgba(8, 36, 92, 0.93) 0%,rgba(13, 58, 114, 0.62) 100%);
-                border-radius: 16px;
-                box-shadow: 0 20px 60px rgba(255, 2, 2, 0.44);
-                z-index: 10000;
-                opacity: 0;
-                transition: all 0.7s cubic-bezier(0.68, -0.55, 0.265, 1.55);
-                backdrop-filter: blur(28px);
-                border: 1px solid rgba(0, 0, 0, 0.2);
-            }
-
-            .welcome-popup.show {
-                left: 40px;
-                opacity: 1;
-            }
-
-            .welcome-popup-content {
-                padding: 25px;
-                color: white;
-                position: relative;
-            }
-
-            .welcome-header {
-                display: flex;
-                align-items: center;
-                gap: 12px;
-                margin-bottom: 16px;
-            }
-
-            .welcome-icon {
-                font-size: 32px;
-                animation: float 3s ease-in-out infinite;
-            }
-
-            @keyframes float {
-                0%, 100% { transform: translateY(0px); }
-                50% { transform: translateY(-8px); }
-            }
-
-            .welcome-header h3 {
-                margin: 0;
-                font-size: 20px;
-                font-weight: 600;
-                text-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-            }
-
-            .welcome-body p {
-                margin: 0;
-                line-height: 1.6;
-                font-size: 14px;
-                opacity: 0.95;
-                text-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
-            }
-
-            .welcome-footer {
-                margin-top: 20px;
-                display: flex;
-                justify-content: flex-end;
-            }
-
-            .welcome-btn {
-                background: rgba(184, 244, 18, 0.67);
-                border: 1px solid rgba(0, 0, 0, 0.3);
-                color: black;
-                padding: 10px 20px;
-                border-radius: 25px;
-                cursor: pointer;
-                font-size: 14px;
-                font-weight: 500;
-                transition: all 0.3s ease;
-                display: flex;
-                align-items: center;
-                gap: 8px;
-                backdrop-filter: blur(10px);
-            }
-
-            .welcome-btn:hover {
-                background: rgba(255, 255, 255, 0.3);
-                transform: translateY(-2px);
-                box-shadow: 0 5px 15px rgb(0, 255, 17);
-            }
-
-            .welcome-btn:active {
-                transform: translateY(0);
-            }
-
-            .welcome-popup::before {
-                content: '';
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                bottom: 0;
-                background: linear-gradient(135deg, 
-                    rgba(255, 255, 255, 0.1) 0%, 
-                    rgba(255, 255, 255, 0.05) 50%, 
-                    rgba(255, 255, 255, 0.1) 100%);
-                border-radius: 16px;
-                pointer-events: none;
-            }
-
-            /* Responsive design */
-            @media (max-width: 768px) {
-                .welcome-popup {
-                    width: 90%;
-                    max-width: 350px;
-                    left: -100%;
-                }
-                
-                .welcome-popup.show {
-                    left: 5%;
-                }
-            }
-
-            /* Pulse animation for the close button */
-            @keyframes pulse {
-                0%, 100% { opacity: 1; }
-                50% { opacity: 0.7; }
-            }
-
-            .welcome-btn span {
-                animation: pulse 2s ease-in-out infinite;
-            }
-        `;
-
-        // Add styles to head
-        document.head.appendChild(styles);
-        
-        // Add popup to body
         document.body.appendChild(popup);
 
-        // Show popup with delay for smooth entry
-        setTimeout(() => {
-            popup.classList.add('show');
-        }, 2000);
-
-        // Add close event listener
-        document.getElementById('welcome-close').addEventListener('click', () => {
-            this.closeWelcomePopup();
-        });
-
-        // Auto-close after 10 seconds
+        setTimeout(() => popup.classList.add('show'), 2000);
+        document.getElementById('welcome-close').addEventListener('click', closeCallback);
         setTimeout(() => {
             if (document.getElementById('welcome-popup')) {
-                this.closeWelcomePopup();
+                closeCallback();
             }
         }, 20000);
     }
@@ -210,56 +294,21 @@ class FlightTracker {
             popup.style.transform = 'translateY(-50%) translateX(-100px)';
             popup.style.opacity = '0';
             popup.style.left = '-400px';
-            
-            setTimeout(() => {
-                popup.remove();
-            }, 600);
+            setTimeout(() => popup.remove(), 600);
         }
     }
 
-    initializeMap() {
-        this.map = L.map('map', {
-            preferCanvas: true,
-            zoomSnap: 0.25,
-            zoomDelta: 0.25,
-            inertia: true,
-            inertiaDeceleration: 3000
-        }).setView([50.8503, 4.3517], 4);
-        
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
-            maxZoom: 10,
-            minZoom: 2
-        }).addTo(this.map);
-
-        this.addMapControls();
-    }
-
-    addMapControls() {
-        const legend = L.control({position: 'bottomleft'});
-        legend.onAdd = () => {
-            const div = L.DomUtil.create('div', 'map-legend');
-            div.innerHTML = `
-                <h4>Flight Types</h4>
-                <div><span class="legend-military">■</span> Military</div>
-                <div><span class="legend-private">■</span> Private</div>
-            `;
-            return div;
-        };
-        legend.addTo(this.map);
-    }
-
-    setupControls() {
+    setupControls(countries, toggleCountryCallback, toggleMilitaryCallback, resetViewCallback) {
         const controls = document.createElement('div');
         controls.className = 'filter-controls';
         controls.innerHTML = `
             <div class="country-filters">
                 <h3>Filter Countries</h3>
                 <div class="country-buttons">
-                    ${Array.from(this.selectedCountries).map(country => `
+                    ${Array.from(countries).map(country => `
                         <button class="country-btn active" data-country="${country}">
                             ${country}
-                        </button>
+                            </button>
                     `).join('')}
                 </div>
             </div>
@@ -273,98 +322,98 @@ class FlightTracker {
             </div>
         `;
         document.querySelector('.flight-list-section').prepend(controls);
-    }
 
-    setupEventListeners() {
-        // Country filter buttons
         document.querySelectorAll('.country-btn').forEach(btn => {
             btn.addEventListener('click', () => {
                 btn.classList.toggle('active');
-                const country = btn.dataset.country;
-                if (btn.classList.contains('active')) {
-                    this.selectedCountries.add(country);
-                } else {
-                    this.selectedCountries.delete(country);
-                }
-                this.updateFlightDisplay();
+                toggleCountryCallback(btn.dataset.country);
             });
         });
 
-        // Military filter
         document.getElementById('military-filter').addEventListener('click', () => {
-            this.showMilitaryOnly = !this.showMilitaryOnly;
+            toggleMilitaryCallback();
             document.getElementById('military-filter').textContent = 
-                this.showMilitaryOnly ? '🛩️ All Types' : '🛡️ Military Only';
-            this.updateFlightDisplay();
+                document.getElementById('military-filter').textContent.includes('Military Only') 
+                ? '🛩️ All Types' : '🛡️ Military Only';
         });
 
-        // Refresh button
-        document.getElementById('refresh-btn').addEventListener('click', () => {
-            this.fetchFlightData();
-        });
-          // Center map button
-      // In your setupEventListeners or wherever the center button is defined:
-document.getElementById('center-btn').addEventListener('click', () => {
-    this.map.setView([50.8503, 4.3517], 4);  // Reset to Europe view
-});
-
-        // Reset view button
-        document.getElementById('reset-view').addEventListener('click', () => {
-            this.resetMapView();
-        });
-
-        // Modal close
-        document.getElementById('close-modal').addEventListener('click', () => this.closeModal());
-        document.getElementById('flight-modal').addEventListener('click', (e) => {
-            if (e.target.id === 'flight-modal') this.closeModal();
-        });
+        document.getElementById('reset-view').addEventListener('click', resetViewCallback);
     }
 
-    isMilitaryFlight(callsign) {
-        if (!callsign) return false;
-        const militaryPrefixes = ["AF", "NAVY", "ARMY", "MARINE", "CG", "PAT"];
-        return militaryPrefixes.some(prefix => callsign.startsWith(prefix));
-    }
-    isPrivateFlight(callsign) {
-        if (!callsign) return false;
-        const privatePrefixes = ["N", "G", "D", "F", "HB", "VP", "C"];
-        return privatePrefixes.some(prefix => callsign.startsWith(prefix)) || callsign.length <= 5;
-    }
+    updateFlightList(flights, focusFlightCallback) {
+        const flightList = document.querySelector(this.selectors.flightList);
+        flightList.innerHTML = '';
+        
+        if (flights.length === 0) {
+            flightList.innerHTML = '<div class="loading-message"><p>No flights in selected countries</p></div>';
+            return;
+        }
 
-    filterFlights() {
-        const now = Date.now();
-        return this.flightData.filter(flight => {
-            // Country filter
-            if (!this.selectedCountries.has(flight.origin_country)) return false;
-            
-            // Military filter
-            if (this.showMilitaryOnly && !this.isMilitaryFlight(flight.callsign)) return false;
-            
-            return true;
-        });
-    }
-
-    async fetchFlightData() {
-        try {
-            this.updateConnectionStatus('connecting');
-            const response = await fetch('/api/flights');
-            const data = await response.json();
-            
-            if (response.ok) {
-                this.flightData = data.flights;
-                this.updateFlightDisplay();
-                this.updateStats(data.count, data.last_updated, data.demo_mode);
-                this.updateConnectionStatus(data.demo_mode ? 'demo' : 'connected');
+        const fragment = document.createDocumentFragment();
+        const visibleFlights = flights.slice(0, 50);
+        
+        visibleFlights.forEach(flight => {
+            const flightItem = document.createElement('div');
+            flightItem.className = 'flight-item';
+            if (this.focusedFlight && this.focusedFlight.icao24 === flight.icao24) {
+                flightItem.classList.add('focused');
             }
-        } catch (error) {
-            console.error('Error:', error);
-            this.updateConnectionStatus('error');
+            flightItem.innerHTML = this.createFlightItemHTML(flight);
+            flightItem.addEventListener('click', () => focusFlightCallback(flight.icao24));
+            fragment.appendChild(flightItem);
+        });
+        
+        flightList.appendChild(fragment);
+    }
+
+    createFlightItemHTML(flight) {
+        const isMilitary = flight.isMilitary();
+        return `
+            <div class="flight-header">
+                <div class="flight-callsign">${flight.callsign}</div>
+                <div class="flight-country ${isMilitary ? 'military' : 'private'}">
+                    ${flight.origin_country}
+                </div>
+            </div>
+            <div class="flight-details">
+                <div class="flight-detail">
+                    <span class="flight-type ${isMilitary ? 'military' : 'private'}">
+                        ${isMilitary ? '🛡️ Military' : '✈️ Private'}
+                    </span>
+                    <span>${Math.round(flight.velocity * 3.6)} km/h</span>
+                </div>
+                <div class="flight-detail">
+                    <span>${Math.round(flight.altitude)} m</span>
+                    <span>${flight.last_contact}</span>
+                </div>
+            </div>`;
+    }
+
+    updateStats(count, lastUpdated, demoMode) {
+        document.querySelector(this.selectors.flightCount).textContent = count;
+        document.querySelector(this.selectors.lastUpdated).textContent = lastUpdated;
+        
+        const demoIndicator = document.getElementById('demo-indicator');
+        if (demoMode) {
+            if (!demoIndicator) {
+                const header = document.querySelector('.header');
+                const indicator = document.createElement('div');
+                indicator.id = 'demo-indicator';
+                indicator.className = 'demo-indicator';
+                indicator.innerHTML = `
+                    <span>🎯 Demo Mode Active</span>
+                    <small> 🔍 "Displaying slightly delayed sample data due to usage limit. Please try again later or change your IP address.</small>
+                `;
+                header.appendChild(indicator);
+            }
+        } else if (demoIndicator) {
+            demoIndicator.remove();
         }
     }
 
     updateConnectionStatus(status) {
-        const statusDot = document.getElementById('connection-status');
-        const statusText = document.getElementById('connection-text');
+        const statusDot = document.querySelector(this.selectors.connectionStatus);
+        const statusText = document.querySelector(this.selectors.connectionText);
         
         statusDot.className = 'status-dot';
         switch (status) {
@@ -384,360 +433,175 @@ document.getElementById('center-btn').addEventListener('click', () => {
         }
     }
 
-    updateStats(count, lastUpdated, demoMode = false) {
-        document.getElementById('flight-count').textContent = this.filteredFlights.length;
-        document.getElementById('last-updated').textContent = lastUpdated;
-        
-        const demoIndicator = document.getElementById('demo-indicator');
-        if (demoMode) {
-            if (!demoIndicator) {
-                const header = document.querySelector('.header');
-                const indicator = document.createElement('div');
-                indicator.id = 'demo-indicator';
-                indicator.className = 'demo-indicator';
-                indicator.innerHTML = `
-                    <span>🎯 Demo Mode Active</span>
-                    <small> 🔍 "Displaying slightly delayed sample data due to usage limit. Please try again later or change your IP address.
-                `;
-                header.appendChild(indicator);
-            }
-        } else if (demoIndicator) {
-            demoIndicator.remove();
-        }
-    }
-
-    updateFlightDisplay() {
-        this.filteredFlights = this.filterFlights();
-        document.getElementById('flight-count').textContent = this.filteredFlights.length;
-        this.updateFlightList();
-        this.updateMapMarkers();
-    }
-
-    updateFlightList() {
-        const flightList = document.getElementById('flight-list');
-        flightList.innerHTML = '';
-        
-        if (this.filteredFlights.length === 0) {
-            flightList.innerHTML = '<div class="loading-message"><p>No flights in selected countries</p></div>';
-            return;
-        }
-
-        const fragment = document.createDocumentFragment();
-        const visibleFlights = this.filteredFlights.slice(0, 50);
-        
-        visibleFlights.forEach(flight => {
-            const flightItem = document.createElement('div');
-            flightItem.className = 'flight-item';
-            if (this.focusedFlight && this.focusedFlight.icao24 === flight.icao24) {
-                flightItem.classList.add('focused');
-            }
-            flightItem.innerHTML = this.createFlightItemHTML(flight);
-            flightItem.addEventListener('click', () => this.showFlightDetails(flight.icao24));
-            fragment.appendChild(flightItem);
-        });
-        
-        flightList.appendChild(fragment);
-    }
-
-    createFlightItemHTML(flight) {
-        const isMilitary = this.isMilitaryFlight(flight.callsign);
-        return `
-            <div class="flight-header">
-                <div class="flight-callsign">${flight.callsign || 'N/A'}</div>
-                <div class="flight-country ${isMilitary ? 'military' : 'private'}">
-                    ${flight.origin_country}
-                </div>
-            </div>
-            <div class="flight-details">
-                <div class="flight-detail">
-                    <span class="flight-type ${isMilitary ? 'military' : 'private'}">
-                        ${isMilitary ? '🛡️ Military' : '✈️ Private'}
-                    </span>
-                    <span>${Math.round((flight.velocity || 0) * 3.6)} km/h</span>
-                </div>
-                <div class="flight-detail">
-                    <span>${Math.round(flight.altitude || 0)} m</span>
-                    <span>${flight.last_contact || 'N/A'}</span>
-                </div>
-            </div>
-            </button>`;
-    }
-
-    updateMapMarkers() {
-        this.clearMarkers();
-        
-        const flightsToShow = this.filteredFlights.slice(0, this.maxMarkers);
-        
-        flightsToShow.forEach(flight => {
-            if (flight.latitude && flight.longitude) {
-                this.addFlightMarker(flight);
-            }
-        });
-        
-        // If we have a focused flight, ensure it's visible
-        if (this.focusedFlight) {
-            const focusedMarker = this.flightMarkers.find(
-                m => m.options.icao24 === this.focusedFlight.icao24
-            );
-            if (focusedMarker) {
-                this.highlightFlight(focusedMarker);
-            }
-        }
-    }
-
-    clearMarkers() {
-        if (this.flightPath) {
-            this.map.removeLayer(this.flightPath);
-            this.flightPath = null;
-        }
-        this.flightMarkers.forEach(marker => this.map.removeLayer(marker));
-        this.flightMarkers = [];
-    }
-
-    addFlightMarker(flight) {
-        const isMilitary = this.isMilitaryFlight(flight.callsign);
-        const iconColor = isMilitary ? '#ff6b6b' : '#51cf66';
-        
-        const icon = L.divIcon({
-            className: 'flight-marker',
-            html: `<span style="color:${iconColor}">✈</span>`,
-            iconSize: [24, 24],
-            iconAnchor: [12, 12]
-        });
-        
-        const marker = L.marker([flight.latitude, flight.longitude], {
-            icon: icon,
-            rotationAngle: flight.heading || 0,
-            icao24: flight.icao24
-        });
-        
-        marker.bindPopup(this.createFlightPopup(flight));
-        marker.addTo(this.map);
-        
-        // Store reference to the original flight data
-        marker.flightData = flight;
-        
-        // Add click handler to focus on this flight
-        marker.on('click', () => {
-            this.focusOnFlight(flight.icao24);
-        });
-        
-        this.flightMarkers.push(marker);
-        
-        // If this is the focused flight, highlight it
-        if (this.focusedFlight && this.focusedFlight.icao24 === flight.icao24) {
-            this.highlightFlight(marker);
-        }
-    }
-
-    createFlightPopup(flight) {
-        const isMilitary = this.isMilitaryFlight(flight.callsign);
-        return `
-            <div class="flight-popup">
-                <h4>${flight.callsign || 'UNKNOWN'}</h4>
-                <p><strong>Type:</strong> <span class="${isMilitary ? 'military' : 'private'}">
-                    ${isMilitary ? 'MILITARY' : 'PRIVATE'}
-                </span></p>
-                <p><strong>From:</strong> ${flight.origin_country}</p>
-                ${flight.destination_country ? `<p><strong>To:</strong> ${flight.destination_country}</p>` : ''}
-                <p><strong>Altitude:</strong> ${Math.round(flight.altitude || 0)} m</p>
-                <p><strong>Speed:</strong> ${Math.round((flight.velocity || 0) * 3.6)} km/h</p>
-                <button class="popup-btn focus-flight" data-icao="${flight.icao24}">
-                    <span>✈</span> Track Flight
-                </button>
-            </div>`;
-    }
-
-    showFlightDetails(icao24) {
-        const flight = this.flightData.find(f => f.icao24 === icao24);
-        if (!flight) return;
-
+    showFlightDetails(flight, focusFlightCallback, closeModalCallback) {
         this.focusedFlight = flight;
+        const isMilitary = flight.isMilitary();
         
-        const isMilitary = this.isMilitaryFlight(flight.callsign);
-        
-        document.getElementById('modal-title').textContent = 
-            `${isMilitary ? '🛡️' : '✈️'} Flight ${flight.callsign || 'Unknown'}`;
+        document.querySelector(this.selectors.modalTitle).textContent = 
+            `${isMilitary ? '🛡️' : '✈️'} Flight ${flight.callsign}`;
             
-        document.getElementById('modal-body').innerHTML = `
+        document.querySelector(this.selectors.modalBody).innerHTML = `
             <div class="modal-grid">
                 <div>
                     <h4>Flight Information</h4>
-                    <p><strong>Callsign:</strong> ${flight.callsign || 'N/A'}</p>
+                    <p><strong>Callsign:</strong> ${flight.callsign}</p>
                     <p><strong>Type:</strong> <span class="${isMilitary ? 'military' : 'private'}">
                         ${isMilitary ? 'MILITARY' : 'PRIVATE'}
                     </span></p>
                     <p><strong>From:</strong> ${flight.origin_country}</p>
-                    <p><strong>To:</strong> ${flight.destination_country || 'N/A'}</p>
+                    <p><strong>To:</strong> ${flight.destination_country}</p>
                 </div>
                 <div>
                     <h4>Position Data</h4>
                     <p><strong>Coordinates:</strong> ${flight.latitude?.toFixed(4)}, ${flight.longitude?.toFixed(4)}</p>
-                    <p><strong>Altitude:</strong> ${Math.round(flight.altitude || 0)} m</p>
-                    <p><strong>Speed:</strong> ${Math.round((flight.velocity || 0) * 3.6)} km/h</p>
-                    <p><strong>Heading:</strong> ${Math.round(flight.heading || 0)}°</p>
+                    <p><strong>Altitude:</strong> ${Math.round(flight.altitude)} m</p>
+                    <p><strong>Speed:</strong> ${Math.round(flight.velocity * 3.6)} km/h</p>
+                    <p><strong>Heading:</strong> ${Math.round(flight.heading)}°</p>
                 </div>
             </div>
             <div class="modal-actions">
-                <button class="modal-btn primary focus-flight" data-icao="${icao24}">
+                <button class="modal-btn primary focus-flight" data-icao="${flight.icao24}">
                     <span>✈</span> Track on Map
                 </button>
-                <button class="modal-btn secondary" onclick="flightTracker.closeModal()">
+                <button class="modal-btn secondary" id="modal-close-btn">
                     Close
                 </button>
             </div>
         `;
         
-        // Add event listeners to focus buttons in modal
         document.querySelectorAll('.focus-flight').forEach(btn => {
             btn.addEventListener('click', (e) => {
                 e.stopPropagation();
-                this.focusOnFlight(btn.dataset.icao);
-                this.closeModal();
+                focusFlightCallback(btn.dataset.icao);
+                closeModalCallback();
             });
         });
         
-        document.getElementById('flight-modal').style.display = 'block';
+        document.getElementById('modal-close-btn').addEventListener('click', closeModalCallback);
+        document.querySelector(this.selectors.flightModal).style.display = 'block';
+    }
+
+    closeModal() {
+        document.querySelector(this.selectors.flightModal).style.display = 'none';
+    }
+}
+
+class FlightTracker {
+    constructor() {
+        this.mapManager = new MapManager('map');
+        this.dataManager = new FlightDataManager();
+        this.uiManager = new UIManager();
+        this.focusedFlight = null;
+        this.updateInterval = null;
+        
+        this.setupEventListeners();
+        this.uiManager.createWelcomePopup(() => this.uiManager.closeWelcomePopup());
+        this.startDataUpdate();
+    }
+
+    setupEventListeners() {
+        document.getElementById('refresh-btn').addEventListener('click', () => this.dataManager.fetchFlightData().then(data => {
+            this.uiManager.updateStats(this.dataManager.filteredFlights.length, data.last_updated, data.demo_mode);
+            this.updateFlightDisplay();
+        }));
+        
+        document.getElementById('center-btn').addEventListener('click', () => {
+            this.mapManager.map.setView([50.8503, 4.3517], 4);
+        });
+
+        document.getElementById('close-modal').addEventListener('click', () => this.uiManager.closeModal());
+        document.getElementById('flight-modal').addEventListener('click', (e) => {
+            if (e.target.id === 'flight-modal') this.uiManager.closeModal();
+        });
+
+        this.uiManager.setupControls(
+            this.dataManager.selectedCountries,
+            country => {
+                this.dataManager.toggleCountry(country);
+                this.updateFlightDisplay();
+            },
+            () => {
+                this.dataManager.toggleMilitaryFilter();
+                this.updateFlightDisplay();
+            },
+            () => this.resetMapView()
+        );
+
+        document.addEventListener('click', (e) => {
+            if (e.target.closest('.focus-flight-btn')) {
+                const icao = e.target.closest('.focus-flight-btn').dataset.icao;
+                this.focusOnFlight(icao);
+            }
+        });
+
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                this.stopDataUpdate();
+            } else {
+                this.startDataUpdate();
+            }
+        });
+
+        window.addEventListener('resize', () => {
+            this.mapManager.map.invalidateSize();
+        });
+    }
+
+    updateFlightDisplay() {
+        this.uiManager.updateFlightList(this.dataManager.filteredFlights, icao => this.focusOnFlight(icao));
+        this.mapManager.clearMarkers();
+        const flightsToShow = this.dataManager.filteredFlights.slice(0, this.dataManager.maxMarkers);
+        flightsToShow.forEach(flight => {
+            if (flight.latitude && flight.longitude) {
+                const marker = this.mapManager.addFlightMarker(flight, icao => this.focusOnFlight(icao));
+                if (this.focusedFlight && this.focusedFlight.icao24 === flight.icao24) {
+                    this.mapManager.highlightFlight(marker);
+                }
+            }
+        });
     }
 
     focusOnFlight(icao24) {
-        const flight = this.flightData.find(f => f.icao24 === icao24);
+        const flight = this.dataManager.flightData.find(f => f.icao24 === icao24);
         if (!flight || !flight.latitude || !flight.longitude) return;
         
         this.focusedFlight = flight;
-        
-        // Find the marker for this flight
-        const marker = this.flightMarkers.find(m => m.options.icao24 === icao24);
-        if (!marker) return;
-        
-        // Update flight list to highlight the focused flight
-        this.updateFlightList();
-        
-        // Fly to the flight's location with smooth animation
-        this.map.flyTo([flight.latitude, flight.longitude], 8, {
-            duration: 1.5,
-            easeLinearity: 0.25,
-            noMoveStart: true
-        });
-        
-        // Highlight the flight on the map
-        this.highlightFlight(marker);
-        
-        // Show flight path if we have heading and speed
-        this.showFlightPath(flight);
-    }
-
-    highlightFlight(marker) {
-        // Remove any existing highlights first
-        this.flightMarkers.forEach(m => {
-            if (m._icon) {
-                m._icon.style.transform = '';
-                m._icon.style.zIndex = '';
-                m._icon.style.filter = '';
-            }
-        });
-        
-        // Highlight the selected marker
-        if (marker._icon) {
-            marker._icon.style.transform = 'scale(1.5)';
-            marker._icon.style.zIndex = '1000';
-            marker._icon.style.filter = 'drop-shadow(0 0 8px currentColor)';
-            
-            // Open popup if not already open
-            if (!marker._popup || !marker._popup._map) {
-                marker.openPopup();
-            }
+        this.uiManager.focusedFlight = flight;
+        this.uiManager.updateFlightList(this.dataManager.filteredFlights, icao => this.focusOnFlight(icao));
+        const marker = this.mapManager.flightMarkers.find(m => m.options.icao24 === icao24);
+        if (marker) {
+            this.mapManager.map.flyTo([flight.latitude, flight.longitude], 8, {
+                duration: 1.5,
+                easeLinearity: 0.25,
+                noMoveStart: true
+            });
+            this.mapManager.highlightFlight(marker);
+            this.mapManager.showFlightPath(flight);
         }
-    }
-
-    showFlightPath(flight) {
-        // Remove any existing flight path
-        if (this.flightPath) {
-            this.map.removeLayer(this.flightPath);
-        }
-        
-        if (!flight.heading || !flight.velocity) return;
-        
-        // Calculate endpoint based on heading and velocity (scaled for visibility)
-        const distance = flight.velocity * 0.2; // Scale factor
-        const headingRad = (flight.heading * Math.PI) / 180;
-        
-        const lat1 = flight.latitude * Math.PI / 180;
-        const lon1 = flight.longitude * Math.PI / 180;
-        const R = 6371; // Earth's radius in km
-        
-        const lat2 = Math.asin(Math.sin(lat1) * Math.cos(distance/R) + 
-                      Math.cos(lat1) * Math.sin(distance/R) * Math.cos(headingRad));
-        const lon2 = lon1 + Math.atan2(Math.sin(headingRad) * Math.sin(distance/R) * Math.cos(lat1), 
-                      Math.cos(distance/R) - Math.sin(lat1) * Math.sin(lat2));
-        
-        const endLat = lat2 * 180 / Math.PI;
-        const endLng = lon2 * 180 / Math.PI;
-        
-        // Create a curved path to show direction
-        this.flightPath = L.curve([
-            'M', [flight.latitude, flight.longitude],
-            'Q', [
-                flight.latitude + (endLat - flight.latitude) * 0.5 + 0.5,
-                flight.longitude + (endLng - flight.longitude) * 0.5
-            ],
-            [endLat, endLng]
-        ], {
-            color: '#667eea',
-            weight: 3,
-            dashArray: '10, 10',
-            opacity: 0.7,
-            fill: false,
-            smoothFactor: 1
-        }).addTo(this.map);
-        
-        // Add arrowhead at the end
-        const arrowhead = L.polygon([
-            [endLat, endLng],
-            [endLat + 0.2, endLng + 0.2],
-            [endLat + 0.2, endLng - 0.2]
-        ], {
-            color: '#667eea',
-            fillColor: '#667eea',
-            fillOpacity: 0.7,
-            weight: 1
-        }).addTo(this.map);
-        
-        this.flightPath.arrowhead = arrowhead;
+        this.uiManager.showFlightDetails(flight, icao => this.focusOnFlight(icao), () => this.uiManager.closeModal());
     }
 
     resetMapView() {
         this.focusedFlight = null;
-        this.map.flyTo([40.7128, -74.0060], 3, {
-            duration: 1,
-            easeLinearity: 0.25
-        });
-        
-        if (this.flightPath) {
-            this.map.removeLayer(this.flightPath);
-            this.flightPath = null;
-        }
-        
-        // Reset marker highlights
-        this.flightMarkers.forEach(marker => {
-            if (marker._icon) {
-                marker._icon.style.transform = '';
-                marker._icon.style.zIndex = '';
-                marker._icon.style.filter = '';
-            }
-        });
-        
-        // Update flight list to remove focus highlights
-        this.updateFlightList();
-    }
-
-    closeModal() {
-        document.getElementById('flight-modal').style.display = 'none';
+        this.uiManager.focusedFlight = null;
+        this.mapManager.resetMapView();
+        this.mapManager.clearMarkers();
+        this.updateFlightDisplay();
     }
 
     startDataUpdate() {
-        this.fetchFlightData();
-        this.updateInterval = setInterval(() => this.fetchFlightData(), 30000);
+        this.dataManager.fetchFlightData().then(data => {
+            this.uiManager.updateStats(this.dataManager.filteredFlights.length, data.last_updated, data.demo_mode);
+            this.uiManager.updateConnectionStatus(data.demo_mode ? 'demo' : 'connected');
+            this.updateFlightDisplay();
+        }).catch(() => this.uiManager.updateConnectionStatus('error'));
+        this.updateInterval = setInterval(() => {
+            this.dataManager.fetchFlightData().then(data => {
+                this.uiManager.updateStats(this.dataManager.filteredFlights.length, data.last_updated, data.demo_mode);
+                this.uiManager.updateConnectionStatus(data.demo_mode ? 'demo' : 'connected');
+                this.updateFlightDisplay();
+            }).catch(() => this.uiManager.updateConnectionStatus('error'));
+        }, 30000);
     }
 
     stopDataUpdate() {
@@ -749,26 +613,4 @@ document.getElementById('center-btn').addEventListener('click', () => {
 let flightTracker;
 document.addEventListener('DOMContentLoaded', () => {
     flightTracker = new FlightTracker();
-    
-    // Delegate focus flight button events
-    document.addEventListener('click', (e) => {
-        if (e.target.closest('.focus-flight-btn')) {
-            const icao = e.target.closest('.focus-flight-btn').dataset.icao;
-            flightTracker.focusOnFlight(icao);
-        }
-    });
-});
-
-// Handle page visibility changes
-document.addEventListener('visibilitychange', () => {
-    if (document.hidden) {
-        flightTracker?.stopDataUpdate();
-    } else {
-        flightTracker?.startDataUpdate();
-    }
-});
-
-// Handle window resize
-window.addEventListener('resize', () => {
-    flightTracker?.map?.invalidateSize();
 });
